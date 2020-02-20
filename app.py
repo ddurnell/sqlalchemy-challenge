@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from flask import Flask, jsonify
 
-
 #################################################
 # Database Setup
 #################################################
@@ -41,9 +40,10 @@ def welcome():
         f"Available Routes:<br/>"
         f"/api/v1.0/precipitation<br/>"
         f"/api/v1.0/stations<br/>"
-        f"/api/v1.0/tobs<br/>"
-        f"/api/v1.0/start<br/>"
-        f"/api/v1.0/start_end"
+        f"/api/v1.0/tobs<br/><br/>"
+        f"Use tstats to enter a start and end date (optional) in the form 'yyy-mm-dd'<br/>"
+        f"example: /api/v1.0/tstats/2017-07-10 or /api/v1.0/tstats/2012-07-10/2017-07-15<br/>"
+        f"/api/v1.0/tstats<br/>"
     )
 
 # A query to retrieve the last 12 months of precipitation data
@@ -82,6 +82,44 @@ def precip_query():
     dfd.head()
     return dfd.to_dict()
 
+# A query to retrieve the last 12 months of temperature data
+# It returns a dictionary
+# TODO: combine this with precip_query. It is almost the same.
+def temp_query():
+    # Calculate the date 1 year ago from the last data point in the database
+    
+    # Create our session (link) from Python to the DB
+    session = Session(engine)
+
+    last_date = session.query(Measurement.date, Measurement.tobs).\
+        order_by(desc(Measurement.date)).all()[0][0]
+
+    ldate = dt.strptime(last_date, '%Y-%m-%d').date()
+    #print(ld)
+    ly = ldate.year
+    lm = ldate.month
+    ld = ldate.day
+
+    fy = ly - 1
+    fd = dt(fy, lm, ld)
+
+    ld_str = ldate.strftime('%Y-%m-%d')
+    fd_str = fd.strftime('%Y-%m-%d')
+
+    last_year = session.query(Measurement.date, Measurement.tobs).\
+        filter(Measurement.date < ldate).\
+        filter(Measurement.date > fd)
+    
+    session.close()
+
+    df = pd.read_sql(last_year.statement, session.bind)
+    dfd = df.set_index('date')
+    dfd = dfd.dropna()
+    dfd = dfd.sort_index()
+    dfd.head()
+    return dfd.to_dict()
+
+
 # Returns a dictionary of dates and precipitation values
 @app.route("/api/v1.0/precipitation")
 def precipitation():
@@ -106,6 +144,30 @@ def stations():
 
     return jsonify(st_df.to_dict(orient="records"))
 
+#Returns a list of dates and temperature observations for the previous year.
+@app.route("/api/v1.0/tobs")
+def tobs():
+    df = temp_query()
+    return jsonify(df)
+
+# Returns a list of the minimum temperature, the average temperature, and the max temperature
+#  for a given start or start-end range.
+@app.route("/api/v1.0/tstats/<start>")
+@app.route("/api/v1.0/tstats/<start>/<end>")
+def tstats(start, end = ""):
+    if end == "":
+        now = dt.today()
+        end = now.strftime("%Y-%m-%d")
+
+    # Create our session (link) from Python to the DB
+    session = Session(engine)
+
+    r = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs)).\
+        filter(Measurement.date >= start).filter(Measurement.date <= end).all()
+
+    session.close()
+
+    return jsonify(r)
 
 if __name__ == '__main__':
     app.run(debug=True)
